@@ -25,16 +25,10 @@
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-    // ------------------------------
-    // Supabase client (anon key included)
-    // ------------------------------
     const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ------------------------------
-    // Read slot from URL and parse safely
-    // ------------------------------
     const params = new URLSearchParams(window.location.search);
     const slotParam = params.get("slot");
     const slot = slotParam ? parseInt(slotParam.replace(/\D/g,'')) : null;
@@ -46,11 +40,53 @@
     const contactInput = document.getElementById("contactInput");
     const statusMsg = document.getElementById("statusMsg");
 
+    let reservedId = null; // ID of reserved row
+
     if (!slot) {
       messageEl.textContent = "No slot detected. Please scan the QR code at the bike rack.";
     } else {
-      messageEl.textContent = "Register for slot " + slot;
-      formContainer.style.display = "block";
+      initializeSlot();
+
+      async function initializeSlot() {
+        messageEl.textContent = "Checking slot " + slot + "...";
+        // Try to find existing reserved row
+        const { data, error } = await supabase
+          .from('registration')
+          .select('*')
+          .eq('slot', slot)
+          .eq('status', 0)
+          .order('created_at', { ascending: true })
+          .limit(1);
+
+        if (error) {
+          statusMsg.textContent = "Connection error. Refresh to retry.";
+          console.error(error);
+          return;
+        }
+
+        if (data.length > 0) {
+          // Slot already in use
+          reservedId = data[0].id;
+          messageEl.textContent = "Register for slot " + slot;
+          formContainer.style.display = "block";
+        } else {
+          // Create new reserved row
+          const { data: newRow, error: insertErr } = await supabase
+            .from('registration')
+            .insert([{ slot, name: "", contact: "", status: 0, fingerid: null }])
+            .select();
+
+          if (insertErr) {
+            messageEl.textContent = "Slot unavailable. Try again later.";
+            console.error(insertErr);
+            return;
+          }
+
+          reservedId = newRow[0].id;
+          messageEl.textContent = "Register for slot " + slot;
+          formContainer.style.display = "block";
+        }
+      }
 
       submitBtn.addEventListener("click", async () => {
         const name = nameInput.value.trim();
@@ -65,34 +101,33 @@
         statusMsg.textContent = "Submitting...";
 
         try {
-          // Insert new registration row
+          // Update reserved row instead of insert
           const { data, error } = await supabase
             .from('registration')
-            .insert([{ slot, name, contact, status: 0, fingerid: null }])
+            .update({ name, contact, status: 0 })
+            .eq('id', reservedId)
             .select();
 
           if (error) throw error;
 
           statusMsg.textContent = "Waiting for fingerprint...";
-          pollStatus(); 
+          pollStatus();
         } catch (err) {
           statusMsg.textContent = "Error submitting. Try again.";
           submitBtn.disabled = false;
-          console.error(err); // debug
+          console.error(err);
         }
       });
     }
 
-    // ------------------------------
-    // Polling function for status updates
-    // ------------------------------
     async function pollStatus() {
+      if (!reservedId) return;
       try {
         const { data, error } = await supabase
           .from('registration')
           .select('*')
-          .eq('slot', slot)
-          .order('created_at', { ascending: true });
+          .eq('id', reservedId)
+          .limit(1);
 
         if (error) throw error;
 
@@ -102,7 +137,7 @@
           return;
         }
 
-        const record = data[data.length - 1];
+        const record = data[0];
 
         switch(record.status) {
           case 0:
@@ -110,13 +145,11 @@
             setTimeout(pollStatus, 2000);
             break;
           case 1:
-            // Show smart alert for duplication/error
             alert("Fingerprint exists or error. Try again.");
-            // Automatically update status back to 0
             await supabase
               .from('registration')
               .update({ status: 0 })
-              .eq('id', record.id);
+              .eq('id', reservedId);
             statusMsg.textContent = "Waiting for fingerprint...";
             setTimeout(pollStatus, 2000);
             break;
@@ -134,9 +167,20 @@
       } catch (err) {
         statusMsg.textContent = "Connection error. Retrying...";
         setTimeout(pollStatus, 3000);
-        console.error(err); // debug
+        console.error(err);
       }
     }
+
+    // Optional: cleanup pending if user closes tab
+    window.addEventListener("beforeunload", async () => {
+      if (reservedId) {
+        await supabase
+          .from('registration')
+          .delete()
+          .eq('id', reservedId)
+          .eq('status', 0);
+      }
+    });
   </script>
 </body>
 </html>
