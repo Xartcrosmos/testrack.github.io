@@ -28,15 +28,18 @@
     // ------------------------------
     // Supabase client (anon key is safe for client-side)
     // ------------------------------
-    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co"; // your project URL
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY"; // replace with your anon key
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // ------------------------------
-    // Read slot from URL
+    // Read slot from URL (numeric)
     // ------------------------------
     const params = new URLSearchParams(window.location.search);
-    const slot = parseInt(params.get("slot"));
+    let slotParam = params.get("slot");
+
+    // Extract number if someone scanned QR with letters, e.g., "BR_01" → 1
+    let slot = slotParam ? parseInt(slotParam.replace(/\D/g, "")) : null;
 
     const messageEl = document.getElementById("message");
     const formContainer = document.getElementById("formContainer");
@@ -45,7 +48,7 @@
     const contactInput = document.getElementById("contactInput");
     const statusMsg = document.getElementById("statusMsg");
 
-    if (!slot) {
+    if (!slot || isNaN(slot)) {
       messageEl.textContent = "No slot detected. Please scan the QR code at the bike rack.";
     } else {
       messageEl.textContent = "Register for slot " + slot;
@@ -75,6 +78,7 @@
           statusMsg.textContent = "Waiting for fingerprint...";
           pollStatus(); // start polling
         } catch (err) {
+          console.error(err);
           statusMsg.textContent = "Error submitting. Try again.";
           submitBtn.disabled = false;
         }
@@ -120,6 +124,7 @@
             submitBtn.disabled = false;
         }
       } catch (err) {
+        console.error(err);
         statusMsg.textContent = "Connection error. Retrying...";
         setTimeout(pollStatus, 3000);
       }
