@@ -22,12 +22,19 @@
     <div id="statusMsg"></div>
   </div>
 
-  <script>
-    // ------------------------------
-    // CONFIG: Replace with your Edge Function URL
-    // ------------------------------
-    const EDGE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co/functions/v1/registration-handler"; 
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
+    // ------------------------------
+    // Supabase client (anon key is safe for client-side)
+    // ------------------------------
+    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co/functions/v1/registration-handler";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY"; // replace with your anon key
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ------------------------------
+    // Read slot from URL
+    // ------------------------------
     const params = new URLSearchParams(window.location.search);
     const slot = parseInt(params.get("slot"));
 
@@ -57,14 +64,13 @@
         statusMsg.textContent = "Submitting...";
 
         try {
-          // POST new registration
-          const postRes = await fetch(EDGE_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slot, name, contact, status: 0, fingerid: null })
-          });
+          // POST new registration row
+          const { data, error } = await supabase
+            .from('registration')
+            .insert([{ slot, name, contact, status: 0, fingerid: null }])
+            .select();
 
-          if (!postRes.ok) throw new Error("Failed to submit registration");
+          if (error) throw error;
 
           statusMsg.textContent = "Waiting for fingerprint...";
           pollStatus(); // start polling
@@ -76,21 +82,25 @@
     }
 
     // ------------------------------
-    // Polling Function
+    // Polling Function: checks latest status for this slot
     // ------------------------------
     async function pollStatus() {
       try {
-        const res = await fetch(`${EDGE_URL}?slot=${slot}`);
-        if (!res.ok) throw new Error("Failed to fetch status");
+        const { data, error } = await supabase
+          .from('registration')
+          .select('*')
+          .eq('slot', slot)
+          .order('created_at', { ascending: true });
 
-        const data = await res.json();
+        if (error) throw error;
+
         if (!data || data.length === 0) {
           statusMsg.textContent = "Waiting for fingerprint...";
           setTimeout(pollStatus, 2000);
           return;
         }
 
-        // Get latest row for the slot
+        // Get latest row for this slot
         const record = data[data.length - 1];
 
         switch(record.status) {
