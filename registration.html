@@ -41,13 +41,23 @@
     const contactInput = document.getElementById("contactInput");
     const statusMsg = document.getElementById("statusMsg");
 
-    // --- LOCK CONFIGURATION ---
     const TIMEOUT_SECONDS = 60; 
-    // Persist SessionID in localStorage so page refresh doesn't lose the lock
     let mySessionId = localStorage.getItem('reg_session_id');
     if (!mySessionId) {
         mySessionId = crypto.randomUUID();
         localStorage.setItem('reg_session_id', mySessionId);
+    }
+
+    async function cleanupIncompleteData() {
+      console.log("Cleaning up old incomplete registrations for slot:", slot);
+      // Delete rows where status is 0 or 1 for this specific slot
+      const { error } = await supabase
+        .from('registration')
+        .delete()
+        .eq('slot', slot)
+        .in('status', [0, 1]);
+      
+      if (error) console.error("Cleanup error:", error);
     }
 
     async function initRegistration() {
@@ -56,7 +66,6 @@
         return;
       }
 
-      // 1. Try to acquire the lock via the SQL function you created in Step 1
       const { data: isLocked, error: lockError } = await supabase.rpc('try_acquire_lock', {
           target_slot: slot,
           new_session_id: mySessionId,
@@ -70,23 +79,26 @@
         return;
       }
 
-      // 2. Lock success! Show form and start Heartbeat
+      // --- CLEANUP STEP ---
+      await cleanupIncompleteData();
+
       messageEl.textContent = "Register for slot " + slot;
       formContainer.style.display = "block";
       startHeartbeat();
 
-      // 3. Handle Form Submission
       submitBtn.addEventListener("click", handleSubmission);
     }
 
     function startHeartbeat() {
-      // Updates the timestamp every 15 seconds to keep the 60s lock from expiring
+      console.log("Heartbeat started for Session:", mySessionId);
       setInterval(async () => {
-        await supabase
+        const { error } = await supabase
           .from('web_lock')
           .update({ last_seen: Math.floor(Date.now() / 1000) })
           .eq('session_id', mySessionId)
           .eq('slot', slot);
+        
+        if (!error) console.log("Heartbeat ping sent...");
       }, 15000);
     }
 
@@ -123,7 +135,7 @@
           .from('registration')
           .select('*')
           .eq('slot', slot)
-          .order('created_at', { ascending: false }) // Get newest first
+          .order('created_at', { ascending: false })
           .limit(1);
 
         if (error) throw error;
@@ -149,7 +161,6 @@
             break;
           case 3:
             statusMsg.textContent = "Registration complete!";
-            // RELEASE LOCK IMMEDIATELY ON SUCCESS
             await supabase.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
             localStorage.removeItem('reg_session_id');
             break;
@@ -159,7 +170,6 @@
       }
     }
 
-    // Launch!
     initRegistration();
   </script>
 </body>
