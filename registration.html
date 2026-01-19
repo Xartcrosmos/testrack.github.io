@@ -8,153 +8,159 @@
     input { padding: 8px; margin: 5px; font-size: 16px; }
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
 
-<h1 id="message">Loading...</h1>
+  <h1 id="message">Validating Slot...</h1>
 
-<div id="formContainer" style="display:none;">
-  <input type="text" id="nameInput" placeholder="Your Name">
-  <input type="text" id="contactInput" placeholder="Contact Number">
-  <br>
-  <button id="submitBtn">Submit</button>
-  <div id="statusMsg"></div>
-</div>
+  <div id="formContainer" style="display:none;">
+    <input type="text" id="nameInput" placeholder="Your Name">
+    <input type="text" id="contactInput" placeholder="Contact Number">
+    <br>
+    <button id="submitBtn">Submit</button>
+    <div id="statusMsg"></div>
+  </div>
 
-<script type="module">
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const params = new URLSearchParams(window.location.search);
-const slotParam = params.get("slot");
-const slot = slotParam ? parseInt(slotParam.replace(/\D/g,'')) : null;
+    const params = new URLSearchParams(window.location.search);
+    const slotParam = params.get("slot");
+    const slot = slotParam ? parseInt(slotParam.replace(/\D/g,'')) : null;
 
-const messageEl = document.getElementById("message");
-const formContainer = document.getElementById("formContainer");
-const submitBtn = document.getElementById("submitBtn");
-const nameInput = document.getElementById("nameInput");
-const contactInput = document.getElementById("contactInput");
-const statusMsg = document.getElementById("statusMsg");
+    const messageEl = document.getElementById("message");
+    const formContainer = document.getElementById("formContainer");
+    const submitBtn = document.getElementById("submitBtn");
+    const nameInput = document.getElementById("nameInput");
+    const contactInput = document.getElementById("contactInput");
+    const statusMsg = document.getElementById("statusMsg");
 
-const SESSION_KEY = "rack_session_id";
-let sessionId = localStorage.getItem(SESSION_KEY);
-if (!sessionId) {
-  sessionId = crypto.randomUUID();
-  localStorage.setItem(SESSION_KEY, sessionId);
-}
-
-const EXPIRE_MS = 120000; // 2 minutes
-const now = () => Date.now();
-
-if (!slot) {
-  messageEl.textContent = "No slot detected. Please scan the QR code at the bike rack.";
-} else {
-  initPage();
-}
-
-async function initPage() {
-  // Clean up any incomplete registration rows
-  await supabase.from("registration").delete().eq("slot", slot).eq("status", 0);
-
-  // Check slot lock
-  const { data } = await supabase.from("web_lock").select("*").eq("id", slot).single();
-
-  if (!data) {
-    await takeLock();
-    startSession();
-  } else {
-    const age = now() - data.last_seen;
-    if (data.session_id === sessionId && age < EXPIRE_MS) {
-      startSession();
-    } else if (age >= EXPIRE_MS) {
-      // expired
-      await supabase.from("web_lock").delete().eq("id", slot);
-      await takeLock();
-      startSession();
-    } else {
-      messageEl.textContent = "UNAVAILABLE";
-    }
-  }
-}
-
-async function takeLock() {
-  await supabase.from("web_lock").insert([{
-    id: slot,
-    session_id: sessionId,
-    last_seen: now()
-  }]);
-}
-
-function startSession() {
-  messageEl.textContent = "Register for slot " + slot;
-  formContainer.style.display = "block";
-
-  // Heartbeat to keep session alive
-  setInterval(async () => {
-    await supabase.from("web_lock")
-      .update({ last_seen: now() })
-      .eq("id", slot)
-      .eq("session_id", sessionId);
-  }, 15000);
-
-  submitBtn.addEventListener("click", submitForm);
-}
-
-async function submitForm() {
-  const name = nameInput.value.trim();
-  const contact = contactInput.value.trim();
-
-  if (!name || !contact) {
-    statusMsg.textContent = "Please enter both name and contact.";
-    return;
-  }
-
-  submitBtn.disabled = true;
-  statusMsg.textContent = "Submitting...";
-
-  try {
-    await supabase.from("registration").insert([{ slot, user: name, contact, status: 0, template: null }]);
-    statusMsg.textContent = "Waiting for fingerprint...";
-    pollStatus();
-  } catch (err) {
-    statusMsg.textContent = "Error submitting. Try again.";
-    submitBtn.disabled = false;
-    console.error(err);
-  }
-}
-
-async function pollStatus() {
-  try {
-    const { data } = await supabase.from('registration')
-      .select('*')
-      .eq('slot', slot)
-      .order('created_at', { ascending: true });
-
-    if (!data || data.length === 0) {
-      setTimeout(pollStatus, 2000);
-      return;
+    // --- LOCK CONFIGURATION ---
+    const TIMEOUT_SECONDS = 60; 
+    // Persist SessionID in localStorage so page refresh doesn't lose the lock
+    let mySessionId = localStorage.getItem('reg_session_id');
+    if (!mySessionId) {
+        mySessionId = crypto.randomUUID();
+        localStorage.setItem('reg_session_id', mySessionId);
     }
 
-    const record = data[data.length - 1];
-    switch(record.status) {
-      case 0: statusMsg.textContent = "Waiting for fingerprint..."; break;
-      case 1:
-        alert("Fingerprint exists or error. Try again.");
-        await supabase.from('registration').update({ status: 0 }).eq('id', record.id);
-        break;
-      case 2: statusMsg.textContent = "Scan finger again..."; break;
-      case 3: statusMsg.textContent = "Registration complete!"; break;
+    async function initRegistration() {
+      if (!slot) {
+        messageEl.textContent = "No slot detected. Please scan the QR code.";
+        return;
+      }
+
+      // 1. Try to acquire the lock via the SQL function you created in Step 1
+      const { data: isLocked, error: lockError } = await supabase.rpc('try_acquire_lock', {
+          target_slot: slot,
+          new_session_id: mySessionId,
+          timeout_seconds: TIMEOUT_SECONDS
+      });
+
+      if (lockError || !isLocked) {
+        messageEl.textContent = "UNAVAILABLE";
+        statusMsg.textContent = "Another user is currently registering for this slot. Please wait 1 minute.";
+        formContainer.style.display = "none";
+        return;
+      }
+
+      // 2. Lock success! Show form and start Heartbeat
+      messageEl.textContent = "Register for slot " + slot;
+      formContainer.style.display = "block";
+      startHeartbeat();
+
+      // 3. Handle Form Submission
+      submitBtn.addEventListener("click", handleSubmission);
     }
 
-    setTimeout(pollStatus, 2000);
-  } catch {
-    setTimeout(pollStatus, 3000);
-  }
-}
-</script>
+    function startHeartbeat() {
+      // Updates the timestamp every 15 seconds to keep the 60s lock from expiring
+      setInterval(async () => {
+        await supabase
+          .from('web_lock')
+          .update({ last_seen: Math.floor(Date.now() / 1000) })
+          .eq('session_id', mySessionId)
+          .eq('slot', slot);
+      }, 15000);
+    }
+
+    async function handleSubmission() {
+      const name = nameInput.value.trim();
+      const contact = contactInput.value.trim();
+
+      if (!name || !contact) {
+        statusMsg.textContent = "Please enter both name and contact.";
+        return;
+      }
+
+      submitBtn.disabled = true;
+      statusMsg.textContent = "Submitting...";
+
+      try {
+        const { error } = await supabase
+          .from('registration')
+          .insert([{ slot, name, contact, status: 0, fingerid: null }]);
+
+        if (error) throw error;
+
+        statusMsg.textContent = "Waiting for fingerprint...";
+        pollStatus(); 
+      } catch (err) {
+        statusMsg.textContent = "Error submitting. Try again.";
+        submitBtn.disabled = false;
+      }
+    }
+
+    async function pollStatus() {
+      try {
+        const { data, error } = await supabase
+          .from('registration')
+          .select('*')
+          .eq('slot', slot)
+          .order('created_at', { ascending: false }) // Get newest first
+          .limit(1);
+
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          setTimeout(pollStatus, 2000);
+          return;
+        }
+
+        const record = data[0];
+        switch(record.status) {
+          case 0:
+            statusMsg.textContent = "Waiting for fingerprint...";
+            setTimeout(pollStatus, 2000);
+            break;
+          case 1:
+            alert("Fingerprint exists or error. Try again.");
+            await supabase.from('registration').update({ status: 0 }).eq('id', record.id);
+            setTimeout(pollStatus, 2000);
+            break;
+          case 2:
+            statusMsg.textContent = "Scan finger again...";
+            setTimeout(pollStatus, 2000);
+            break;
+          case 3:
+            statusMsg.textContent = "Registration complete!";
+            // RELEASE LOCK IMMEDIATELY ON SUCCESS
+            await supabase.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
+            localStorage.removeItem('reg_session_id');
+            break;
+        }
+      } catch (err) {
+        setTimeout(pollStatus, 3000);
+      }
+    }
+
+    // Launch!
+    initRegistration();
+  </script>
 </body>
 </html>
