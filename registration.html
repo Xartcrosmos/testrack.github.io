@@ -37,7 +37,6 @@
       }
 
       const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
       const params = new URLSearchParams(window.location.search);
       const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
       const mySessionId = localStorage.getItem('reg_session_id');
@@ -60,20 +59,18 @@
               return;
           }
 
-          // Cleanup Incomplete Data (Status 0 and 1)
-          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
+          // Cleanup 
+          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1, 2]);
 
           messageEl.textContent = "Registering for Slot " + slot;
           document.getElementById("formContainer").style.display = "block";
 
-          // Heartbeat
           setInterval(async () => {
             await client.from('web_lock').update({ 
                 last_seen: Math.floor(Date.now() / 1000) 
             }).eq('session_id', mySessionId).eq('slot', slot);
           }, 15000);
 
-          // Submit Action
           document.getElementById("submitBtn").onclick = async () => {
             const name = document.getElementById("nameInput").value.trim();
             const contact = document.getElementById("contactInput").value.trim();
@@ -96,14 +93,12 @@
           };
 
       } catch (err) {
-          console.error(err);
-          messageEl.textContent = "Connection Error. Check internet.";
+          messageEl.textContent = "Connection Error.";
       }
     };
 
     async function pollStatus(client, slot) {
       const statusMsg = document.getElementById("statusMsg");
-      
       const { data, error } = await client
         .from('registration')
         .select('*')
@@ -116,18 +111,16 @@
         return;
       }
 
-      const record = data[0];
+      const record = data[0]; // Access the first object in the array
 
-      // ADVANCED SWITCH LOGIC
       switch(record.status) {
         case 0:
           statusMsg.textContent = "Place finger on scanner...";
           setTimeout(() => pollStatus(client, slot), 2000);
           break;
         case 1:
-          alert("Fingerprint exists or sensor error. Resetting...");
-          // Reset status back to 0 so user can try again
-          await client.from('registration').update({ status: 0 }).eq('id', record.id);
+          statusMsg.textContent = "Error! Finger exists or sensor failed.";
+          // Optional alert
           setTimeout(() => pollStatus(client, slot), 2000);
           break;
         case 2:
@@ -136,7 +129,6 @@
           break;
         case 3:
           statusMsg.textContent = "Registration complete!";
-          // Clean up the lock
           await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
           localStorage.removeItem('reg_session_id');
           break;
