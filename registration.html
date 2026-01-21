@@ -9,7 +9,7 @@
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
   </style>
-  <!-- Using Unpkg to match your working index.html -->
+  <!-- Direct link to the library -->
   <script src="https://unpkg.com"></script>
 </head>
 <body>
@@ -25,22 +25,24 @@
   </div>
 
   <script>
-    // We wait for the library and window to be 100% ready
+    // 1. Wait for everything to load
     window.onload = async function() {
       const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
       const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
       
       const messageEl = document.getElementById("message");
+      
+      // 2. Library Check
       if (typeof supabase === 'undefined') {
-          messageEl.textContent = "Library Error. Refresh page.";
+          messageEl.textContent = "Library Error. Please refresh the page.";
           return;
       }
 
       const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+      // 3. Variables
       const params = new URLSearchParams(window.location.search);
       const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
-      // Pull the SAME ID created by index.html
       const mySessionId = localStorage.getItem('reg_session_id');
 
       if (!slot || !mySessionId) {
@@ -48,59 +50,66 @@
         return;
       }
 
-      // Re-verify the lock ownership
-      const { data: isLocked, error: lockError } = await client.rpc('try_acquire_lock', {
-          target_slot: slot,
-          new_session_id: mySessionId,
-          timeout_seconds: 60
-      });
+      // 4. Verification Logic
+      try {
+          const { data: isLocked, error: lockError } = await client.rpc('try_acquire_lock', {
+              target_slot: slot,
+              new_session_id: mySessionId,
+              timeout_seconds: 60
+          });
 
-      if (lockError || !isLocked) {
-        console.log("Lock verification failed", lockError);
-        window.location.href = `index.html?slot=${slot}`;
-        return;
+          if (lockError || !isLocked) {
+              messageEl.textContent = "Session Expired. Returning home...";
+              setTimeout(() => { window.location.href = `index.html?slot=${slot}`; }, 2000);
+              return;
+          }
+
+          // 5. Cleanup Incomplete Data (Status 0 and 1)
+          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
+
+          // 6. UI Setup
+          messageEl.textContent = "Registering for Slot " + slot;
+          document.getElementById("formContainer").style.display = "block";
+
+          // 7. Heartbeat
+          setInterval(async () => {
+            await client.from('web_lock').update({ 
+                last_seen: Math.floor(Date.now() / 1000) 
+            }).eq('session_id', mySessionId).eq('slot', slot);
+          }, 15000);
+
+          // 8. Submit Action
+          document.getElementById("submitBtn").onclick = async () => {
+            const name = document.getElementById("nameInput").value.trim();
+            const contact = document.getElementById("contactInput").value.trim();
+            if (!name || !contact) return;
+            
+            document.getElementById("submitBtn").disabled = true;
+            document.getElementById("statusMsg").textContent = "Submitting...";
+
+            const { error } = await client.from('registration').insert([
+                { slot, name, contact, status: 0 }
+            ]);
+
+            if (error) {
+                document.getElementById("statusMsg").textContent = "Error. Try again.";
+                document.getElementById("submitBtn").disabled = false;
+            } else {
+                document.getElementById("statusMsg").textContent = "Waiting for fingerprint...";
+                pollStatus(client, slot);
+            }
+          };
+
+      } catch (err) {
+          console.error(err);
+          messageEl.textContent = "Connection Error. Check internet.";
       }
-
-      // Clean up old status 0 or 1 data
-      await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
-
-      // Setup UI
-      messageEl.textContent = "Registering for Slot " + slot;
-      document.getElementById("formContainer").style.display = "block";
-
-      // Start Heartbeat
-      setInterval(async () => {
-        await client.from('web_lock').update({ 
-            last_seen: Math.floor(Date.now() / 1000) 
-        }).eq('session_id', mySessionId).eq('slot', slot);
-      }, 15000);
-
-      document.getElementById("submitBtn").onclick = async () => {
-        const name = document.getElementById("nameInput").value.trim();
-        const contact = document.getElementById("contactInput").value.trim();
-        if (!name || !contact) return;
-        
-        document.getElementById("submitBtn").disabled = true;
-        document.getElementById("statusMsg").textContent = "Submitting...";
-
-        const { error } = await client.from('registration').insert([
-            { slot, name, contact, status: 0, fingerid: null }
-        ]);
-
-        if (error) {
-            document.getElementById("statusMsg").textContent = "Error. Try again.";
-            document.getElementById("submitBtn").disabled = false;
-        } else {
-            document.getElementById("statusMsg").textContent = "Waiting for fingerprint...";
-            pollStatus(client, slot);
-        }
-      };
     };
 
     async function pollStatus(client, slot) {
-      const { data, error } = await client
+      const { data } = await client
         .from('registration')
-        .select('*')
+        .select('status, id')
         .eq('slot', slot)
         .order('created_at', { ascending: false })
         .limit(1);
@@ -109,7 +118,6 @@
         const record = data[0];
         if (record.status === 3) {
           document.getElementById("statusMsg").textContent = "Registration complete!";
-          // Release lock
           await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
           localStorage.removeItem('reg_session_id');
         } else {
