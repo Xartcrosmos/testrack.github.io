@@ -15,7 +15,7 @@
   <button id="registerBtn">Register</button>
 
   <script type="module">
-    // Fixed direct import to bypass JSDelivr CORS redirects
+    // Direct import from esm.sh to prevent the JSDelivr CORS redirect error
     import { createClient } from "https://esm.sh";
 
     const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
@@ -29,7 +29,7 @@
     const messageEl = document.getElementById("message");
     const buttonEl = document.getElementById("registerBtn");
 
-    // --- SESSION ID LOGIC ---
+    // --- SESSION ID PERSISTENCE ---
     let mySessionId = localStorage.getItem('reg_session_id');
     if (!mySessionId) {
         mySessionId = crypto.randomUUID();
@@ -42,42 +42,49 @@
         return;
       }
 
-      console.log("Checking Slot:", slot, "with Session:", mySessionId);
+      console.log("Checking Slot:", slot, "Session:", mySessionId);
 
-      // 1. Try to acquire lock via Supabase RPC
-      const { data: isLocked, error } = await supabase.rpc('try_acquire_lock', {
-          target_slot: slot,
-          new_session_id: mySessionId,
-          timeout_seconds: 60
-      });
+      try {
+        // 1. Claim the lock via Supabase RPC
+        const { data: isLocked, error } = await supabase.rpc('try_acquire_lock', {
+            target_slot: slot,
+            new_session_id: mySessionId,
+            timeout_seconds: 60
+        });
 
-      if (error) {
-          console.error("Supabase RPC Error:", error);
-          messageEl.textContent = "System Error. Please try again later.";
-          return;
-      }
+        if (error) {
+            console.error("Supabase RPC Error:", error.message);
+            messageEl.textContent = "Connection Error. Refresh the page.";
+            return;
+        }
 
-      if (!isLocked) {
-        messageEl.textContent = "Slot " + slot + " is UNAVAILABLE";
-        messageEl.classList.add("unavailable");
-        buttonEl.style.display = "none";
-      } else {
-        messageEl.textContent = "Slot " + slot + " detected.";
-        buttonEl.style.display = "inline-block";
-        
-        // 2. Start heartbeat while user is on this page
-        startHeartbeat();
+        if (!isLocked) {
+          // LOCK FAILED: Slot is busy
+          messageEl.textContent = "Slot " + slot + " is UNAVAILABLE";
+          messageEl.classList.add("unavailable");
+          buttonEl.style.display = "none";
+        } else {
+          // LOCK SUCCESS: Show button and start heartbeat
+          messageEl.textContent = "Slot " + slot + " detected.";
+          buttonEl.style.display = "inline-block";
+          startHeartbeat();
+        }
+      } catch (err) {
+        console.error("Initialization Failed:", err);
+        messageEl.textContent = "Critical Error. Check Console.";
       }
     }
 
     function startHeartbeat() {
-      console.log("Heartbeat pulse active...");
+      console.log("Heartbeat active...");
       setInterval(async () => {
-        await supabase
+        const { error } = await supabase
           .from('web_lock')
           .update({ last_seen: Math.floor(Date.now() / 1000) })
           .eq('session_id', mySessionId)
           .eq('slot', slot);
+        
+        if (error) console.error("Heartbeat failed:", error.message);
       }, 15000);
     }
 
