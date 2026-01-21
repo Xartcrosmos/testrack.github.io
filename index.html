@@ -6,35 +6,76 @@
   <style>
     body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }
     #registerBtn { padding: 10px 20px; font-size: 18px; cursor: pointer; display: none; }
+    .unavailable { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
 
-  <h1 id="message">Loading...</h1>
+  <h1 id="message">Validating Slot...</h1>
   <button id="registerBtn">Register</button>
 
-  <script>
-    // Read slot from URL
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net";
+
+    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     const params = new URLSearchParams(window.location.search);
-    const slot = params.get("slot");
+    const slotStr = params.get("slot");
+    const slot = slotStr ? parseInt(slotStr.replace(/\D/g,'')) : null;
 
     const messageEl = document.getElementById("message");
     const buttonEl = document.getElementById("registerBtn");
 
-    if (!slot) {
-      // No slot in URL → visitor not in bikerack range
-      messageEl.textContent = "Welcome!";
-    } else {
-      // Slot exists → show register button
-      messageEl.textContent = "Slot " + slot + " detected.";
-      buttonEl.style.display = "inline-block";
-
-      buttonEl.addEventListener("click", () => {
-        // Redirect to registration.html with slot preserved
-        window.location.href = `registration.html?slot=${slot}`;
-      });
+    // --- SESSION ID LOGIC ---
+    let mySessionId = localStorage.getItem('reg_session_id');
+    if (!mySessionId) {
+        mySessionId = crypto.randomUUID();
+        localStorage.setItem('reg_session_id', mySessionId);
     }
-  </script>
 
+    async function handleEntrance() {
+      if (!slot) {
+        messageEl.textContent = "Welcome to Smart Bike Rack!";
+        return;
+      }
+
+      // 1. Try to acquire lock
+      const { data: isLocked, error } = await supabase.rpc('try_acquire_lock', {
+          target_slot: slot,
+          new_session_id: mySessionId,
+          timeout_seconds: 60
+      });
+
+      if (error || !isLocked) {
+        messageEl.textContent = "Slot " + slot + " is UNAVAILABLE";
+        messageEl.classList.add("unavailable");
+        buttonEl.style.display = "none";
+      } else {
+        messageEl.textContent = "Slot " + slot + " detected.";
+        buttonEl.style.display = "inline-block";
+        
+        // 2. Start heartbeat while user is on this page
+        startHeartbeat();
+      }
+    }
+
+    function startHeartbeat() {
+      setInterval(async () => {
+        await supabase
+          .from('web_lock')
+          .update({ last_seen: Math.floor(Date.now() / 1000) })
+          .eq('session_id', mySessionId)
+          .eq('slot', slot);
+      }, 15000);
+    }
+
+    buttonEl.addEventListener("click", () => {
+      window.location.href = `registration.html?slot=${slot}`;
+    });
+
+    handleEntrance();
+  </script>
 </body>
 </html>
