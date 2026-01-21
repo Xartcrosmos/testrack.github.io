@@ -15,6 +15,7 @@
   <button id="registerBtn">Register</button>
 
   <script type="module">
+    // Fixed direct import to bypass JSDelivr CORS redirects
     import { createClient } from "https://esm.sh";
 
     const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
@@ -41,14 +42,22 @@
         return;
       }
 
-      // 1. Try to acquire lock
+      console.log("Checking Slot:", slot, "with Session:", mySessionId);
+
+      // 1. Try to acquire lock via Supabase RPC
       const { data: isLocked, error } = await supabase.rpc('try_acquire_lock', {
           target_slot: slot,
           new_session_id: mySessionId,
           timeout_seconds: 60
       });
 
-      if (error || !isLocked) {
+      if (error) {
+          console.error("Supabase RPC Error:", error);
+          messageEl.textContent = "System Error. Please try again later.";
+          return;
+      }
+
+      if (!isLocked) {
         messageEl.textContent = "Slot " + slot + " is UNAVAILABLE";
         messageEl.classList.add("unavailable");
         buttonEl.style.display = "none";
@@ -62,6 +71,7 @@
     }
 
     function startHeartbeat() {
+      console.log("Heartbeat pulse active...");
       setInterval(async () => {
         await supabase
           .from('web_lock')
