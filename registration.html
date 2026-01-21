@@ -9,8 +9,8 @@
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
   </style>
-  <!-- CORRECTED LIBRARY LINK -->
-  <script src="https://unpkg.com"></script>
+  <!-- FIXED: This must have the full path to work -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -31,7 +31,7 @@
       
       const messageEl = document.getElementById("message");
       
-      // 1. Check if Supabase loaded correctly
+      // 1. Library Check
       if (typeof supabase === 'undefined') {
           messageEl.textContent = "Library Error. Please refresh the page.";
           return;
@@ -39,7 +39,7 @@
 
       const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-      // 2. Parse URL and Session
+      // 2. Variables
       const params = new URLSearchParams(window.location.search);
       const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
       const mySessionId = localStorage.getItem('reg_session_id');
@@ -49,9 +49,8 @@
         return;
       }
 
-      // 3. Logic Execution
+      // 3. Verification Logic
       try {
-          // Acquire lock via RPC
           const { data: isLocked, error: lockError } = await client.rpc('try_acquire_lock', {
               target_slot: slot,
               new_session_id: mySessionId,
@@ -64,21 +63,21 @@
               return;
           }
 
-          // Cleanup old registration attempts
+          // 4. Cleanup Incomplete Data
           await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
 
-          // Setup UI
+          // 5. UI Setup
           messageEl.textContent = "Registering for Slot " + slot;
           document.getElementById("formContainer").style.display = "block";
 
-          // Heartbeat to keep lock alive
+          // 6. Heartbeat
           setInterval(async () => {
             await client.from('web_lock').update({ 
                 last_seen: Math.floor(Date.now() / 1000) 
             }).eq('session_id', mySessionId).eq('slot', slot);
           }, 15000);
 
-          // Submit Handler
+          // 7. Submit Action
           document.getElementById("submitBtn").onclick = async () => {
             const name = document.getElementById("nameInput").value.trim();
             const contact = document.getElementById("contactInput").value.trim();
@@ -115,7 +114,8 @@
         .limit(1);
 
       if (data && data.length > 0) {
-        if (data[0].status === 3) {
+        const record = data[0];
+        if (record.status === 3) {
           document.getElementById("statusMsg").textContent = "Registration complete!";
           await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
           localStorage.removeItem('reg_session_id');
