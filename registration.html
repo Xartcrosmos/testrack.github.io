@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Smart Bike Rack Registration</title>
+  <title>Registration</title>
   <style>
     body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
     input { padding: 8px; margin: 5px; font-size: 16px; }
@@ -12,9 +12,7 @@
   <script src="https://unpkg.com"></script>
 </head>
 <body>
-
-  <h1 id="message">Accessing Slot...</h1>
-
+  <h1 id="message">Finalizing Lock...</h1>
   <div id="formContainer" style="display:none;">
     <input type="text" id="nameInput" placeholder="Your Name">
     <input type="text" id="contactInput" placeholder="Contact Number">
@@ -24,96 +22,53 @@
   </div>
 
   <script>
-    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
-    
-    const params = new URLSearchParams(window.location.search);
-    const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
-    const mySessionId = localStorage.getItem('reg_session_id');
+    window.onload = async function() {
+      const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
+      const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    const messageEl = document.getElementById("message");
-    const formContainer = document.getElementById("formContainer");
-    const submitBtn = document.getElementById("submitBtn");
-    const statusMsg = document.getElementById("statusMsg");
+      const params = new URLSearchParams(window.location.search);
+      const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
+      const mySessionId = localStorage.getItem('reg_session_id');
 
-    let client;
+      if (!slot || !mySessionId) { window.location.href = "index.html"; return; }
 
-    async function startApp() {
-      if (!slot || !mySessionId) {
-        window.location.href = "index.html";
-        return;
-      }
+      const { data: isLocked } = await client.rpc('try_acquire_lock', {
+          target_slot: slot, new_session_id: mySessionId, timeout_seconds: 60
+      });
 
-      try {
-        // Initialize Supabase Client
-        client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      if (!isLocked) { window.location.href = `index.html?slot=${slot}`; return; }
 
-        // ATTEMPT LOCK
-        const { data: isLocked, error } = await client.rpc('try_acquire_lock', {
-            target_slot: slot,
-            new_session_id: mySessionId,
-            timeout_seconds: 60
-        });
+      await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
+      document.getElementById("message").textContent = "Registering for Slot " + slot;
+      document.getElementById("formContainer").style.display = "block";
 
-        if (error || !isLocked) {
-          messageEl.textContent = "Access Denied / Slot Busy";
-          setTimeout(() => window.location.href = "index.html", 3000);
-          return;
-        }
-
-        // CLEANUP & SHOW FORM
-        await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
-        
-        messageEl.textContent = "Registering for Slot " + slot;
-        formContainer.style.display = "block";
-        
-        startHeartbeat();
-        submitBtn.onclick = handleSubmission;
-
-      } catch (err) {
-        console.error(err);
-        messageEl.textContent = "Connection Error. Refreshing...";
-        setTimeout(() => location.reload(), 2000);
-      }
-    }
-
-    function startHeartbeat() {
       setInterval(async () => {
-        await client.from('web_lock').update({ 
-            last_seen: Math.floor(Date.now() / 1000) 
-        }).eq('session_id', mySessionId).eq('slot', slot);
+        await client.from('web_lock').update({ last_seen: Math.floor(Date.now() / 1000) })
+              .eq('session_id', mySessionId).eq('slot', slot);
       }, 15000);
-    }
 
-    async function handleSubmission() {
-      const name = document.getElementById("nameInput").value.trim();
-      const contact = document.getElementById("contactInput").value.trim();
-      if (!name || !contact) { statusMsg.textContent = "Enter details."; return; }
+      document.getElementById("submitBtn").onclick = async () => {
+        const name = document.getElementById("nameInput").value.trim();
+        const contact = document.getElementById("contactInput").value.trim();
+        if (!name || !contact) return;
+        
+        document.getElementById("submitBtn").disabled = true;
+        const { error } = await client.from('registration').insert([{ slot, name, contact, status: 0 }]);
+        if (!error) pollStatus(client, slot);
+      };
+    };
 
-      submitBtn.disabled = true;
-      statusMsg.textContent = "Submitting...";
-
-      const { error } = await client.from('registration').insert([{ slot, name, contact, status: 0 }]);
-      if (error) { statusMsg.textContent = "Fail. Try again."; submitBtn.disabled = false; }
-      else { statusMsg.textContent = "Waiting for finger..."; pollStatus(); }
-    }
-
-    async function pollStatus() {
-      const { data } = await client.from('registration').select('status, id').eq('slot', slot).order('created_at', { ascending: false }).limit(1);
-      if (data && data[0]) {
-        const res = data[0];
-        if (res.status === 3) {
-          statusMsg.textContent = "Success!";
-          await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
-          localStorage.removeItem('reg_session_id');
-        } else {
-          setTimeout(pollStatus, 2000);
-        }
+    async function pollStatus(client, slot) {
+      const { data } = await client.from('registration').select('*').eq('slot', slot).order('created_at', { ascending: false }).limit(1);
+      if (data && data[0]?.status === 3) {
+        document.getElementById("statusMsg").textContent = "Complete!";
+        await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
+        localStorage.removeItem('reg_session_id');
+      } else {
+        setTimeout(() => pollStatus(client, slot), 2000);
       }
     }
-
-    // WAIT FOR PAGE TO LOAD COMPLETELY
-    window.addEventListener('load', startApp);
   </script>
 </body>
 </html>
