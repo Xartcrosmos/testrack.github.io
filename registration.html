@@ -9,8 +9,7 @@
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
   </style>
-  <!-- FIXED: This must have the full path to work -->
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://unpkg.com"></script>
 </head>
 <body>
 
@@ -30,16 +29,14 @@
       const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
       
       const messageEl = document.getElementById("message");
+      const statusMsg = document.getElementById("statusMsg");
       
-      // 1. Library Check
       if (typeof supabase === 'undefined') {
           messageEl.textContent = "Library Error. Please refresh the page.";
           return;
       }
 
       const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-      // 2. Variables
       const params = new URLSearchParams(window.location.search);
       const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
       const mySessionId = localStorage.getItem('reg_session_id');
@@ -49,7 +46,6 @@
         return;
       }
 
-      // 3. Verification Logic
       try {
           const { data: isLocked, error: lockError } = await client.rpc('try_acquire_lock', {
               target_slot: slot,
@@ -63,67 +59,81 @@
               return;
           }
 
-          // 4. Cleanup Incomplete Data
-          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
+          // Cleanup 
+          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1, 2]);
 
-          // 5. UI Setup
           messageEl.textContent = "Registering for Slot " + slot;
           document.getElementById("formContainer").style.display = "block";
 
-          // 6. Heartbeat
           setInterval(async () => {
             await client.from('web_lock').update({ 
                 last_seen: Math.floor(Date.now() / 1000) 
             }).eq('session_id', mySessionId).eq('slot', slot);
           }, 15000);
 
-          // 7. Submit Action
           document.getElementById("submitBtn").onclick = async () => {
             const name = document.getElementById("nameInput").value.trim();
             const contact = document.getElementById("contactInput").value.trim();
             if (!name || !contact) return;
             
             document.getElementById("submitBtn").disabled = true;
-            document.getElementById("statusMsg").textContent = "Submitting...";
+            statusMsg.textContent = "Submitting...";
 
             const { error } = await client.from('registration').insert([
                 { slot, name, contact, status: 0 }
             ]);
 
             if (error) {
-                document.getElementById("statusMsg").textContent = "Error. Try again.";
+                statusMsg.textContent = "Error. Try again.";
                 document.getElementById("submitBtn").disabled = false;
             } else {
-                document.getElementById("statusMsg").textContent = "Waiting for fingerprint...";
+                statusMsg.textContent = "Waiting for fingerprint...";
                 pollStatus(client, slot);
             }
           };
 
       } catch (err) {
-          console.error(err);
-          messageEl.textContent = "Connection Error. Check internet.";
+          messageEl.textContent = "Connection Error.";
       }
     };
 
     async function pollStatus(client, slot) {
-      const { data } = await client
+      const statusMsg = document.getElementById("statusMsg");
+      const { data, error } = await client
         .from('registration')
-        .select('status')
+        .select('*')
         .eq('slot', slot)
         .order('created_at', { ascending: false })
         .limit(1);
 
-      if (data && data.length > 0) {
-        const record = data[0];
-        if (record.status === 3) {
-          document.getElementById("statusMsg").textContent = "Registration complete!";
+      if (error || !data || data.length === 0) {
+        setTimeout(() => pollStatus(client, slot), 2000);
+        return;
+      }
+
+      const record = data[0]; // Access the first object in the array
+
+      switch(record.status) {
+        case 0:
+          statusMsg.textContent = "Place finger on scanner...";
+          setTimeout(() => pollStatus(client, slot), 2000);
+          break;
+        case 1:
+          statusMsg.textContent = "Error! Finger exists or sensor failed.";
+          // Optional alert
+          setTimeout(() => pollStatus(client, slot), 2000);
+          break;
+        case 2:
+          statusMsg.textContent = "Scan finger again to confirm...";
+          setTimeout(() => pollStatus(client, slot), 2000);
+          break;
+        case 3:
+          statusMsg.textContent = "Registration complete!";
           await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
           localStorage.removeItem('reg_session_id');
-        } else {
+          break;
+        default:
           setTimeout(() => pollStatus(client, slot), 2000);
-        }
-      } else {
-        setTimeout(() => pollStatus(client, slot), 2000);
       }
     }
   </script>
