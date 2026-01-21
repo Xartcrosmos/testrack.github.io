@@ -8,8 +8,9 @@
     input { padding: 8px; margin: 5px; font-size: 16px; }
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
+    #message { color: #333; }
   </style>
-  <!-- Load library via script tag to bypass CORS redirect issues -->
+  <!-- Fixed Library Source to match index.html -->
   <script src="https://unpkg.com"></script>
 </head>
 <body>
@@ -25,24 +26,24 @@
   </div>
 
   <script>
-    // 1. Initialize Supabase
     const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
     
-    // Check if library loaded
+    let client;
+    const messageEl = document.getElementById("message");
+
+    // 1. Initialize Supabase with Error Handling
     if (typeof supabase === 'undefined') {
-        document.getElementById("message").textContent = "Library Load Failed. Check internet.";
+        messageEl.textContent = "Library Load Failed. Check internet.";
+    } else {
+        client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     }
 
-    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    // 2. Setup Variables
     const params = new URLSearchParams(window.location.search);
     const slotStr = params.get("slot");
     const slot = slotStr ? parseInt(slotStr.replace(/\D/g,'')) : null;
     const mySessionId = localStorage.getItem('reg_session_id');
 
-    const messageEl = document.getElementById("message");
     const formContainer = document.getElementById("formContainer");
     const submitBtn = document.getElementById("submitBtn");
     const nameInput = document.getElementById("nameInput");
@@ -51,18 +52,18 @@
 
     async function cleanupIncompleteData() {
       console.log("Cleaning old status 0/1 entries for slot:", slot);
-      // Fixed syntax for deleting multiple statuses
+      // Clean syntax for deleting multiple statuses
       await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
     }
 
     async function initRegistration() {
-      // Safety check: if they skipped index.html or cleared cache
+      // Safety check for session hand-off
       if (!slot || !mySessionId) {
         window.location.href = "index.html";
         return;
       }
 
-      // Re-verify/Update the lock using the SQL function
+      // Re-verify ownership of the lock via SQL Function
       const { data: isLocked, error } = await client.rpc('try_acquire_lock', {
           target_slot: slot,
           new_session_id: mySessionId,
@@ -71,14 +72,14 @@
 
       if (error || !isLocked) {
         console.error("Lock error:", error);
-        alert("Session expired or slot taken. Redirecting...");
+        alert("Session expired or slot taken. Redirecting to home...");
         window.location.href = `index.html?slot=${slot}`;
         return;
       }
 
-      // Success: Clean up and show form
+      // Success: Clear abandoned data and show form
       await cleanupIncompleteData();
-      messageEl.textContent = "Register for slot " + slot;
+      messageEl.textContent = "Registering for Slot " + slot;
       formContainer.style.display = "block";
       
       startHeartbeat();
@@ -86,7 +87,7 @@
     }
 
     function startHeartbeat() {
-      console.log("Heartbeat started...");
+      console.log("Heartbeat pulse active for Slot:", slot);
       setInterval(async () => {
         await client
           .from('web_lock')
@@ -114,11 +115,11 @@
           .insert([{ slot, name, contact, status: 0, fingerid: null }]);
 
         if (error) throw error;
-        statusMsg.textContent = "Waiting for fingerprint...";
+        statusMsg.textContent = "Waiting for fingerprint scanner...";
         pollStatus(); 
       } catch (err) {
         console.error("Submission Error:", err);
-        statusMsg.textContent = "Error. Try again.";
+        statusMsg.textContent = "Submission failed. Try again.";
         submitBtn.disabled = false;
       }
     }
@@ -144,8 +145,7 @@
             setTimeout(pollStatus, 2000);
             break;
           case 1:
-            alert("Fingerprint exists or error. Try again.");
-            // Reset status for re-try
+            alert("Fingerprint error or already exists. Try again.");
             await client.from('registration').update({ status: 0 }).eq('id', record.id);
             setTimeout(pollStatus, 2000);
             break;
@@ -166,8 +166,8 @@
       }
     }
 
-    // Start logic
-    initRegistration();
+    // Run initialization
+    if (client) initRegistration();
   </script>
 </body>
 </html>
