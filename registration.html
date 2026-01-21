@@ -9,6 +9,7 @@
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
   </style>
+  <!-- USING THE WORKING LINK FROM INDEX.HTML -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -25,18 +26,15 @@
 
   <script>
     window.onload = async function() {
-      const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
-      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
-      
-      const messageEl = document.getElementById("message");
-      const statusMsg = document.getElementById("statusMsg");
-      
       if (typeof supabase === 'undefined') {
-          messageEl.textContent = "Library Error. Please refresh the page.";
+          document.getElementById("message").textContent = "Library Error. Please refresh.";
           return;
       }
 
+      const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
       const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
       const params = new URLSearchParams(window.location.search);
       const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
       const mySessionId = localStorage.getItem('reg_session_id');
@@ -47,24 +45,25 @@
       }
 
       try {
-          const { data: isLocked, error: lockError } = await client.rpc('try_acquire_lock', {
+          const { data: isLocked } = await client.rpc('try_acquire_lock', {
               target_slot: slot,
               new_session_id: mySessionId,
               timeout_seconds: 60
           });
 
-          if (lockError || !isLocked) {
-              messageEl.textContent = "Session Expired. Returning home...";
+          if (!isLocked) {
+              document.getElementById("message").textContent = "Session Expired.";
               setTimeout(() => { window.location.href = `index.html?slot=${slot}`; }, 2000);
               return;
           }
 
-          // Cleanup 
-          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1, 2]);
+          // Cleanup old attempts
+          await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
 
-          messageEl.textContent = "Registering for Slot " + slot;
+          document.getElementById("message").textContent = "Registering for Slot " + slot;
           document.getElementById("formContainer").style.display = "block";
 
+          // Heartbeat
           setInterval(async () => {
             await client.from('web_lock').update({ 
                 last_seen: Math.floor(Date.now() / 1000) 
@@ -77,63 +76,37 @@
             if (!name || !contact) return;
             
             document.getElementById("submitBtn").disabled = true;
-            statusMsg.textContent = "Submitting...";
+            document.getElementById("statusMsg").textContent = "Submitting...";
 
-            const { error } = await client.from('registration').insert([
-                { slot, name, contact, status: 0 }
-            ]);
-
-            if (error) {
-                statusMsg.textContent = "Error. Try again.";
-                document.getElementById("submitBtn").disabled = false;
-            } else {
-                statusMsg.textContent = "Waiting for fingerprint...";
-                pollStatus(client, slot);
-            }
+            await client.from('registration').insert([{ slot, name, contact, status: 0 }]);
+            pollStatus(client, slot);
           };
 
       } catch (err) {
-          messageEl.textContent = "Connection Error.";
+          console.error(err);
       }
     };
 
     async function pollStatus(client, slot) {
-      const statusMsg = document.getElementById("statusMsg");
-      const { data, error } = await client
-        .from('registration')
-        .select('*')
-        .eq('slot', slot)
-        .order('created_at', { ascending: false })
-        .limit(1);
+      const { data } = await client.from('registration').select('*').eq('slot', slot).order('created_at', { ascending: false }).limit(1);
 
-      if (error || !data || data.length === 0) {
-        setTimeout(() => pollStatus(client, slot), 2000);
-        return;
-      }
+      if (data && data.length > 0) {
+        const record = data[0];
+        const statusMsg = document.getElementById("statusMsg");
 
-      const record = data[0]; // Access the first object in the array
-
-      switch(record.status) {
-        case 0:
-          statusMsg.textContent = "Place finger on scanner...";
-          setTimeout(() => pollStatus(client, slot), 2000);
-          break;
-        case 1:
-          statusMsg.textContent = "Error! Finger exists or sensor failed.";
-          // Optional alert
-          setTimeout(() => pollStatus(client, slot), 2000);
-          break;
-        case 2:
-          statusMsg.textContent = "Scan finger again to confirm...";
-          setTimeout(() => pollStatus(client, slot), 2000);
-          break;
-        case 3:
+        if (record.status === 3) {
           statusMsg.textContent = "Registration complete!";
           await client.from('web_lock').update({ last_seen: 0 }).eq('slot', slot);
           localStorage.removeItem('reg_session_id');
-          break;
-        default:
+        } else if (record.status === 2) {
+          statusMsg.textContent = "Scan finger again...";
           setTimeout(() => pollStatus(client, slot), 2000);
+        } else {
+          statusMsg.textContent = "Waiting for fingerprint (Status: " + record.status + ")...";
+          setTimeout(() => pollStatus(client, slot), 2000);
+        }
+      } else {
+        setTimeout(() => pollStatus(client, slot), 2000);
       }
     }
   </script>
