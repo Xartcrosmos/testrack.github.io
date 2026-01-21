@@ -9,7 +9,7 @@
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
     #statusMsg { margin-top: 20px; font-weight: bold; }
   </style>
-  <!-- Load library via script tag to match index.html -->
+  <!-- Load library via script tag to bypass CORS redirect issues -->
   <script src="https://unpkg.com"></script>
 </head>
 <body>
@@ -28,11 +28,18 @@
     // 1. Initialize Supabase
     const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
+    
+    // Check if library loaded
+    if (typeof supabase === 'undefined') {
+        document.getElementById("message").textContent = "Library Load Failed. Check internet.";
+    }
+
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // 2. Setup Variables
     const params = new URLSearchParams(window.location.search);
-    const slot = params.get("slot") ? parseInt(params.get("slot").replace(/\D/g,'')) : null;
+    const slotStr = params.get("slot");
+    const slot = slotStr ? parseInt(slotStr.replace(/\D/g,'')) : null;
     const mySessionId = localStorage.getItem('reg_session_id');
 
     const messageEl = document.getElementById("message");
@@ -43,7 +50,8 @@
     const statusMsg = document.getElementById("statusMsg");
 
     async function cleanupIncompleteData() {
-      console.log("Cleaning old status 0/1 entries...");
+      console.log("Cleaning old status 0/1 entries for slot:", slot);
+      // Fixed syntax for deleting multiple statuses
       await client.from('registration').delete().eq('slot', slot).in('status', [0, 1]);
     }
 
@@ -54,7 +62,7 @@
         return;
       }
 
-      // Re-verify/Update the lock
+      // Re-verify/Update the lock using the SQL function
       const { data: isLocked, error } = await client.rpc('try_acquire_lock', {
           target_slot: slot,
           new_session_id: mySessionId,
@@ -62,6 +70,7 @@
       });
 
       if (error || !isLocked) {
+        console.error("Lock error:", error);
         alert("Session expired or slot taken. Redirecting...");
         window.location.href = `index.html?slot=${slot}`;
         return;
@@ -77,6 +86,7 @@
     }
 
     function startHeartbeat() {
+      console.log("Heartbeat started...");
       setInterval(async () => {
         await client
           .from('web_lock')
@@ -107,6 +117,7 @@
         statusMsg.textContent = "Waiting for fingerprint...";
         pollStatus(); 
       } catch (err) {
+        console.error("Submission Error:", err);
         statusMsg.textContent = "Error. Try again.";
         submitBtn.disabled = false;
       }
@@ -134,6 +145,7 @@
             break;
           case 1:
             alert("Fingerprint exists or error. Try again.");
+            // Reset status for re-try
             await client.from('registration').update({ status: 0 }).eq('id', record.id);
             setTimeout(pollStatus, 2000);
             break;
@@ -149,10 +161,12 @@
             break;
         }
       } catch (err) {
+        console.error("Polling Error:", err);
         setTimeout(pollStatus, 3000);
       }
     }
 
+    // Start logic
     initRegistration();
   </script>
 </body>
