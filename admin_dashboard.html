@@ -1,5 +1,198 @@
-<html>
-  <body>
-    HELO
-  </body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { margin:0; font-family: Arial, sans-serif; background:#f4f6f9; }
+    .container { display:flex; min-height:100vh; }
+    .main { flex:1; padding:20px; }
+    .panel { width:260px; background:#1f2933; color:#fff; padding:20px; }
+    .panel h2 { margin-top:0; }
+    .panel button { width:100%; margin:8px 0; padding:10px; border:none; border-radius:6px; cursor:pointer; }
+    .panel button.active { background:#2563eb; color:#fff; }
+    .panel button.inactive { background:#374151; color:#e5e7eb; }
+    h1 { margin-top:0; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; }
+    th, td { padding:10px; border:1px solid #e5e7eb; text-align:center; }
+    th { background:#e5e7eb; }
+    .status-active { color:green; font-weight:bold; }
+    .status-inactive { color:red; font-weight:bold; }
+    .btn-delete { background:#dc2626; color:#fff; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; }
+    .error { color:#b91c1c; background:#fee2e2; padding:10px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="main">
+      <h1 id="viewTitle">View Racks</h1>
+      <div id="content"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Admin Panel</h2>
+      <button id="btnRacks" class="active">View Racks</button>
+      <button id="btnUsers" class="inactive">Manage Users</button>
+      <button id="btnLogs" class="inactive">View Logs</button>
+    </div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = "https://qkswuqrgtbfcdywzuxtk.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrc3d1cXJndGJmY2R5d3p1eHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MjU4MTIsImV4cCI6MjA4MzMwMTgxMn0.OHKaVlA9IpHwlEq5cCm6crJ-n-P-M762MvZqB0XiZxY";
+
+    const { createClient } = window.supabase;
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const content = document.getElementById("content");
+    const viewTitle = document.getElementById("viewTitle");
+
+    const btnRacks = document.getElementById("btnRacks");
+    const btnUsers = document.getElementById("btnUsers");
+    const btnLogs = document.getElementById("btnLogs");
+
+    btnRacks.onclick = () => setView("racks");
+    btnUsers.onclick = () => setView("users");
+    btnLogs.onclick = () => setView("logs");
+
+    function setActiveButton(activeBtn) {
+      [btnRacks, btnUsers, btnLogs].forEach(btn => {
+        btn.classList.remove("active");
+        btn.classList.add("inactive");
+      });
+      activeBtn.classList.add("active");
+      activeBtn.classList.remove("inactive");
+    }
+
+    function setView(view) {
+      if (view === "racks") {
+        viewTitle.innerText = "View Racks";
+        setActiveButton(btnRacks);
+        loadRacks();
+      }
+      if (view === "users") {
+        viewTitle.innerText = "Manage Users";
+        setActiveButton(btnUsers);
+        loadUsers();
+      }
+      if (view === "logs") {
+        viewTitle.innerText = "View Logs";
+        setActiveButton(btnLogs);
+        loadLogs();
+      }
+    }
+
+    // Normalize Supabase responses to avoid unexpected shapes
+    async function safeSelect(queryPromise) {
+      try {
+        const res = await queryPromise;
+        console.debug("Supabase raw response:", res);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        const error = res?.error || null;
+        return { data, error, raw: res };
+      } catch (e) {
+        console.error("Supabase exception:", e);
+        return { data: [], error: e, raw: null };
+      }
+    }
+
+    function renderError(message, errorObj) {
+      const details = errorObj ? `<pre>${escapeHtml(JSON.stringify(errorObj, null, 2))}</pre>` : "";
+      content.innerHTML = `<div class="error"><strong>${message}</strong>${details}</div>`;
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[s]));
+    }
+
+    async function loadRacks() {
+      content.innerHTML = "Loading...";
+      const { data, error } = await safeSelect(
+        supabaseClient.from("web_lock").select("slot,last_seen").order("slot")
+      );
+
+      if (error) {
+        renderError("Error loading racks", error);
+        return;
+      }
+
+      let html = `<table><tr><th>Slot</th><th>Status</th></tr>`;
+      data.forEach(r => {
+        const status = Number(r.last_seen) > 0 ? "Active" : "Inactive";
+        const cls = Number(r.last_seen) > 0 ? "status-active" : "status-inactive";
+        html += `<tr><td>${r.slot ?? ""}</td><td class="${cls}">${status}</td></tr>`;
+      });
+      html += "</table>";
+      content.innerHTML = html;
+    }
+
+    async function loadUsers() {
+      content.innerHTML = "Loading...";
+      const { data, error } = await safeSelect(
+        supabaseClient.from("registration").select("id,created_at,name,contact").order("created_at", { ascending: false })
+      );
+
+      if (error) {
+        renderError("Error loading users", error);
+        return;
+      }
+
+      let html = `<table><tr><th>Date</th><th>Name</th><th>Number</th><th>Action</th></tr>`;
+      data.forEach(u => {
+        const date = u.created_at ? new Date(u.created_at).toLocaleString() : "-";
+        html += `<tr>
+          <td>${date}</td>
+          <td>${u.name || ""}</td>
+          <td>${u.contact || ""}</td>
+          <td><button class="btn-delete" onclick="deleteUser(${u.id})">Delete</button></td>
+        </tr>`;
+      });
+      html += "</table>";
+      content.innerHTML = html;
+    }
+
+    async function deleteUser(id) {
+      if (!confirm("Delete this user?")) return;
+      const res = await supabaseClient.from("registration").delete().eq("id", id);
+      console.debug("Delete response:", res);
+      if (res?.error) {
+        renderError("Delete failed", res.error);
+      } else {
+        loadUsers();
+      }
+    }
+
+    async function loadLogs() {
+      // Logs feature not implemented yet
+      content.innerHTML = `<div style="padding:20px; background:#fff; border-radius:8px; text-align:center;">
+        <h3>🚧 Under Development</h3>
+        <p>The <strong>View Logs</strong> feature is not available yet.</p>
+        <p>This section will display session logs once the <code>login</code> table is implemented.</p>
+      </div>`;
+    }
+
+    // --- Minimal runtime tests (sanity checks) ---
+    (function runUserTableTest(){
+      console.assert(typeof loadUsers === 'function', 'loadUsers should exist');
+      console.assert(typeof deleteUser === 'function', 'deleteUser should exist');
+    })();
+
+    // --- Minimal runtime tests (sanity checks) ---
+    (function runLogsTest(){
+      console.assert(typeof loadLogs === 'function', 'loadLogs should exist');
+    })();
+
+    (function runTests(){
+      console.assert(typeof supabaseClient === 'object', 'supabaseClient should be initialized');
+      console.assert(typeof safeSelect === 'function', 'safeSelect should exist');
+      console.assert(document.getElementById('content'), '#content should exist');
+      console.assert(document.getElementById('btnRacks'), '#btnRacks should exist');
+    })();
+
+    // default view
+    setView("racks");
+  </script>
+</body>
 </html>
